@@ -60,15 +60,6 @@ typedef struct {
 
 /* init funcs */
 
-// init line to have zero bytes in it, zero in valid bit
-void init_line(line **lp, int E, int b) {
-  *lp = calloc(1, sizeof(line));
-  line *l = *lp;
-  if (!l) {
-    exit(1);
-  }
-}
-
 // init set and initialize all its lines
 void init_set(set **sp, int s, int E, int b) {
   set *sset = *sp;
@@ -79,10 +70,6 @@ void init_set(set **sp, int s, int E, int b) {
   if (!sset->lines) {
     exit(1);
   }
-  for (int i = 0; i < E; i++) {
-    line *current_line = &(sset->lines[i]);
-    init_line(&current_line, E, b);
-  }
 }
 
 // init cache and set its parameters
@@ -92,7 +79,7 @@ void init_cache(cache **cp, int s, int E, int b) {
   if (!c) {
     exit(1);
   }
-  int S = (int)pow(2, s);
+  int S = 1 << s;
   c->sets = calloc(1, S * sizeof(set));
   if (!c->sets) {
     exit(1);
@@ -110,23 +97,15 @@ void init_cache(cache **cp, int s, int E, int b) {
 
 /* free funcs */
 
-void free_line(line *l) {
-  free(l);
-  l = NULL;
-}
-
-void free_set(set *s, int E) {
-  for (int i = 0; i < E; i++) {
-    free_line(&s->lines[i]);
+void free_sets(set *s, int S) {
+  for (int i = 0; i < S; i++) {
+    free(s[i].lines);
   }
-  free(s);
-  s = NULL;
 }
 
 void free_cache(cache *c) {
-  for (int i = 0; i < c->S; i++) {
-    free_set(&c->sets[i], c->E);
-  }
+  free_sets(c->sets, c->S);
+  free(c->sets);
   free(c);
   c = NULL;
 }
@@ -246,5 +225,7 @@ int main(int argc, char **argv) {
 
   // printSummary
   printSummary(hits, misses, evictions);
+  free_cache(c);
+  fclose(fptr);
   return 0;
 }

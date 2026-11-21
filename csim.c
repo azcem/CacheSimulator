@@ -37,58 +37,21 @@ memory_access parse_text_line(char *text_line) {
   return mem_access;
 }
 
-/* queue struct and funcs */
-typedef struct {
-  int items[QUEUE_MAX_SIZE];
-  int front;
-  int rear;
-} queue;
-
-void init_queue(queue *q) {
-  q->front = -1;
-  q->rear = -1;
-}
-
-bool is_empty_queue(queue *q) { return q->front == -1; }
-
-bool is_full_queue(queue *q) {
-  return (q->rear + 1) % QUEUE_MAX_SIZE == q->front;
-}
-
-void push_queue(queue *q, int data) {
-  if (q->front == -1) {
-    q->front = 0;
-  }
-  q->rear = (q->rear + 1) % QUEUE_MAX_SIZE;
-  q->items[q->rear] = data;
-}
-
-int pop_queue(queue *q) {
-  if (is_empty_queue(q))
-    return -1;
-  int data = q->items[q->front];
-  if (q->front == q->rear) {
-    q->front = q->rear = -1;
-  } else {
-    q->front = (q->front + 1) % QUEUE_MAX_SIZE;
-  }
-  return data;
-}
-
 /* cache structs */
 
 typedef struct {
-  int tag;
+  unsigned long long last_used;
+  unsigned long long tag;
   char valid;
 } line;
 
 typedef struct {
   line *lines;
-  queue lru_queue;
 } set;
 
 typedef struct {
   set *sets;
+  unsigned long long clock;
   int S;
   int E;
   int b;
@@ -175,66 +138,48 @@ void print_cache(cache *c) {
     printf("Set %d addr= %p\n", i, (c->sets + i));
     for (int j = 0; j < c->E; j++) {
       printf("  line %d addr= %p\n", j, &(c->sets[i].lines[j]));
-      printf("  valid= %d tag= %x\n", c->sets[i].lines[j].valid,
+      printf("  valid= %d tag= %llx\n", c->sets[i].lines[j].valid,
              c->sets[i].lines[j].tag);
     }
   }
 }
 
 enum Status query_cache(cache *c, unsigned long long address) {
-  unsigned long long ones_mask = -1;
+  unsigned long long s = (address >> c->b) & ((1ULL << c->s) - 1);
+  unsigned long long t = address >> (c->s + c->b);
+  set *current_set = c->sets + s;
+  c->clock++;
 
-  unsigned long long t_s = address & (ones_mask << c->b);
-  t_s = t_s >> c->b;
-
-  unsigned long long s_mask = (1 << (c->s)) - 1;
-  int s = t_s & s_mask;
-
-  int t = t_s >> c->s;
-
-  // printf("address= %llb\n", address);
-  // printf("s_mask = %llb\n", s_mask);
-  // printf("s = %b t= %b\n", s, t);
-  // printf("t_s = %llb\n", t_s);
-  set *current_set = &c->sets[s];
-  int valid_count = 0;
+  int empty = -1;
+  int lru = 0;
   for (int i = 0; i < c->E; i++) {
     line *current_line = current_set->lines + i;
-    if (current_line->valid)
-      valid_count++;
-    if (current_line->tag == t) {
-      if (current_line->valid) {
+    if (current_line->valid) {
+      if (current_line->tag == t) {
+        current_line->last_used = c->clock;
         return HIT;
       }
     }
-  }
-  // miss, check if need to evict
-  if (valid_count == c->E) {
-    // get lru line
-    int lru_line_index = pop_queue(&(current_set->lru_queue));
-    line *lru_line = &current_set->lines[lru_line_index];
-    lru_line->tag = t;
-    lru_line->valid = 1;
-    return EVICT;
-  }
-
-  // if valid_count less than E then there's an empty line and no need to evict
-  for (int i = 0; i < c->E; i++) {
-    line *current_line = &current_set->lines[i];
-    if (!current_line->valid) {
-      current_line->valid = true;
-      current_line->tag = t;
-      push_queue(&(current_set->lru_queue), i);
-      break;
+    if (!current_line->valid && empty == -1) {
+      empty = i;
+    } else if (current_line->last_used < current_set->lines[lru].last_used) {
+      lru = i;
     }
   }
-  return MISS;
+  int victim = (empty >= 0) ? empty : lru;
+
+  line *v = current_set->lines + victim;
+  v->valid = 1;
+  v->tag = t;
+  v->last_used = c->clock;
+  return (empty >= 0) ? MISS : EVICT;
 }
 
 int main(int argc, char **argv) {
   // input handling
   int s, E, b;
   FILE *fptr = NULL;
+  bool verbose = false;
   for (int i = 1; i < argc; i++) {
     if (argv[i][1] == 's')
       s = atoi(argv[i + 1]);
@@ -244,6 +189,8 @@ int main(int argc, char **argv) {
       b = atoi(argv[i + 1]);
     else if (argv[i][1] == 't')
       fptr = fopen(argv[i + 1], "r");
+    else if (argv[i][1] == 'v')
+      verbose = true;
   }
   if (fptr == NULL) {
     printf("error loading file.\n");
@@ -277,6 +224,24 @@ int main(int argc, char **argv) {
     // then add hit for store
     if (mem_access.operation == DATA_MODIFY)
       hits++;
+    if (verbose) {
+      // remove \n
+      int i = 0;
+      while (buffer[i] != '\n') {
+        i++;
+      }
+      buffer[i] = '\0';
+      printf("%s ", buffer + 1);
+      if (status == HIT)
+        printf("hit");
+      if (status == EVICT)
+        printf("miss eviction");
+      if (status == MISS)
+        printf("miss");
+      if (mem_access.operation == DATA_MODIFY)
+        printf(" hit");
+      printf("\n");
+    }
   }
 
   // printSummary
